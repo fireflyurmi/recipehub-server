@@ -39,17 +39,14 @@ async function run() {
     });
 
     // --- Browse Recipes & Details Routes ---
-
     app.get("/all-recipes", async (req, res) => {
       try {
         const { category } = req.query;
         let query = {};
-
         if (category && category !== "All") {
           const categoriesArray = category.split(",");
           query = { category: { $in: categoriesArray } };
         }
-
         const result = await recipesCollection.find(query).toArray();
         res.send(result);
       } catch (error) {
@@ -60,8 +57,7 @@ async function run() {
     app.get("/recipes/:id", async (req, res) => {
       try {
         const id = req.params.id;
-        const query = { _id: new ObjectId(id) };
-        const result = await recipesCollection.findOne(query);
+        const result = await recipesCollection.findOne({ _id: new ObjectId(id) });
         res.send(result);
       } catch (error) {
         res.status(500).send({ message: "Error fetching recipe details" });
@@ -73,15 +69,11 @@ async function run() {
         const recipeData = req.body;
         const { authorEmail } = recipeData;
         const user = await usersCollection.findOne({ email: authorEmail });
-        const userRecipeCount = await recipesCollection.countDocuments({
-          authorEmail,
-        });
+        const userRecipeCount = await recipesCollection.countDocuments({ authorEmail });
         const isPremium = user?.isPremium === true;
 
         if (!isPremium && userRecipeCount >= 2) {
-          return res.status(403).send({
-            message: "Recipe limit reached! Please upgrade to Premium.",
-          });
+          return res.status(403).send({ message: "Recipe limit reached! Please upgrade to Premium." });
         }
 
         const result = await recipesCollection.insertOne(recipeData);
@@ -93,26 +85,32 @@ async function run() {
 
     app.post("/payments", async (req, res) => {
       try {
-        const paymentData = req.body;
+        const { paymentType, userEmail, ...paymentDetails } = req.body;
+
         const result = await paymentsCollection.insertOne({
-          ...paymentData,
+          ...paymentDetails,
+          userEmail,
+          paymentType,
           paidAt: new Date(),
         });
-        await usersCollection.updateOne(
-          { email: paymentData.userEmail },
-          { $set: { isPremium: true } },
-        );
+
+        if (paymentType === "subscription") {
+          await usersCollection.updateOne(
+            { email: userEmail },
+            { $set: { isPremium: true } }
+          );
+        }
+
         res.status(201).send(result);
       } catch (error) {
         res.status(500).send({ message: "Error saving payment", error });
       }
     });
+
     // My recipes API
     app.get("/my-recipes/:email", async (req, res) => {
       try {
-        const result = await recipesCollection
-          .find({ authorEmail: req.params.email })
-          .toArray();
+        const result = await recipesCollection.find({ authorEmail: req.params.email }).toArray();
         res.send(result);
       } catch (error) {
         res.status(500).send({ message: "Error fetching recipes" });
@@ -122,40 +120,29 @@ async function run() {
     // DELETE
     app.delete("/recipes/:id", async (req, res) => {
       try {
-        const id = req.params.id;
-        const query = { _id: new ObjectId(id) };
-        const result = await recipesCollection.deleteOne(query);
+        const result = await recipesCollection.deleteOne({ _id: new ObjectId(req.params.id) });
         res.send(result);
       } catch (error) {
         res.status(500).send({ message: "Error deleting recipe" });
       }
     });
 
-    // UPDATE 
+    // UPDATE
     app.patch("/recipes/:id", async (req, res) => {
       try {
-        const id = req.params.id;
-        const updatedData = req.body;
-        const filter = { _id: new ObjectId(id) };
-        const updateDoc = { $set: updatedData };
-
-        const result = await recipesCollection.updateOne(filter, updateDoc);
-
-        if (result.matchedCount === 0) {
-          return res.status(404).send({ message: "Recipe not found" });
-        }
-
-        res.send({ message: "Recipe updated successfully", result });
+        const result = await recipesCollection.updateOne(
+          { _id: new ObjectId(req.params.id) },
+          { $set: req.body }
+        );
+        res.send(result);
       } catch (error) {
         res.status(500).send({ message: "Error updating recipe", error });
       }
     });
 
-    // Ping check and Connection confirmation
+    // Ping check
     await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!",
-    );
+    console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } catch (err) {
     console.error("MongoDB Connection Error:", err);
   }
