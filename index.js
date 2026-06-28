@@ -16,7 +16,7 @@ app.use(
   cors({
     origin: [process.env.CLIENT_URL],
     credentials: true,
-  })
+  }),
 );
 app.use(express.json());
 
@@ -32,10 +32,11 @@ async function run() {
   try {
     await client.connect();
     const db = client.db(process.env.AUTH_DB_NAME);
-    
+
     // Collections
     const recipesCollection = db.collection("recipes");
-    const usersCollection = db.collection("user"); 
+    const usersCollection = db.collection("user");
+    const paymentsCollection = db.collection("payments"); 
 
     // Root check
     app.get("/", (req, res) => {
@@ -48,34 +49,63 @@ async function run() {
         const recipeData = req.body;
         const { authorEmail } = recipeData;
 
-        // 1. Check user premium status
         const user = await usersCollection.findOne({ email: authorEmail });
-        
-        // 2. Count existing recipes for this user
-        const userRecipeCount = await recipesCollection.countDocuments({ authorEmail });
+        const userRecipeCount = await recipesCollection.countDocuments({
+          authorEmail,
+        });
 
-        // 3. Logic: If NOT premium and count >= 2, block addition
-        // We check if user exists and if they are premium
         const isPremium = user?.isPremium === true;
 
         if (!isPremium && userRecipeCount >= 2) {
-          return res.status(403).send({ 
-            message: "Recipe limit reached! Please upgrade to Premium for unlimited access." 
+          return res.status(403).send({
+            message:
+              "Recipe limit reached! Please upgrade to Premium for unlimited access.",
           });
         }
 
-        // 4. Proceed with insertion
         const result = await recipesCollection.insertOne(recipeData);
         res.status(201).send(result);
-        
       } catch (error) {
         res.status(500).send({ message: "Error adding recipe", error });
       }
     });
 
-    await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
     
+    app.post("/payments", async (req, res) => {
+      try {
+        const paymentData = req.body;
+        
+        const result = await paymentsCollection.insertOne({
+          ...paymentData,
+          paidAt: new Date() 
+        });
+
+        await usersCollection.updateOne(
+          { email: paymentData.userEmail },
+          { $set: { isPremium: true } }
+        );
+
+        res.status(201).send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error saving payment", error });
+      }
+    });
+
+    app.get("/my-recipes/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
+        const query = { authorEmail: email };
+        const result = await recipesCollection.find(query).toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error fetching recipes" });
+      }
+    });
+
+    await client.db("admin").command({ ping: 1 });
+    console.log(
+      "Pinged your deployment. You successfully connected to MongoDB!",
+    );
   } catch (err) {
     console.error("MongoDB Connection Error:", err);
   }
