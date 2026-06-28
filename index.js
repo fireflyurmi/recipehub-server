@@ -57,7 +57,9 @@ async function run() {
     app.get("/recipes/:id", async (req, res) => {
       try {
         const id = req.params.id;
-        const result = await recipesCollection.findOne({ _id: new ObjectId(id) });
+        const result = await recipesCollection.findOne({
+          _id: new ObjectId(id),
+        });
         res.send(result);
       } catch (error) {
         res.status(500).send({ message: "Error fetching recipe details" });
@@ -69,11 +71,15 @@ async function run() {
         const recipeData = req.body;
         const { authorEmail } = recipeData;
         const user = await usersCollection.findOne({ email: authorEmail });
-        const userRecipeCount = await recipesCollection.countDocuments({ authorEmail });
+        const userRecipeCount = await recipesCollection.countDocuments({
+          authorEmail,
+        });
         const isPremium = user?.isPremium === true;
 
         if (!isPremium && userRecipeCount >= 2) {
-          return res.status(403).send({ message: "Recipe limit reached! Please upgrade to Premium." });
+          return res.status(403).send({
+            message: "Recipe limit reached! Please upgrade to Premium.",
+          });
         }
 
         const result = await recipesCollection.insertOne(recipeData);
@@ -82,7 +88,7 @@ async function run() {
         res.status(500).send({ message: "Error adding recipe", error });
       }
     });
-
+    // For Payments
     app.post("/payments", async (req, res) => {
       try {
         const { paymentType, userEmail, ...paymentDetails } = req.body;
@@ -97,7 +103,7 @@ async function run() {
         if (paymentType === "subscription") {
           await usersCollection.updateOne(
             { email: userEmail },
-            { $set: { isPremium: true } }
+            { $set: { isPremium: true } },
           );
         }
 
@@ -107,10 +113,33 @@ async function run() {
       }
     });
 
+    app.get("/payments/:email", async (req, res) => {
+  try {
+    const email = req.params.email;
+    const result = await paymentsCollection.aggregate([
+      { $match: { userEmail: email } },
+      {
+        $project: {
+          amount: 1,
+          paidAt: 1,
+          recipeId: 1,
+          transactionId: 1,     
+          paymentStatus: 1,      
+        },
+      },
+    ]).toArray();
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Error fetching payments" });
+  }
+});
+
     // My recipes API
     app.get("/my-recipes/:email", async (req, res) => {
       try {
-        const result = await recipesCollection.find({ authorEmail: req.params.email }).toArray();
+        const result = await recipesCollection
+          .find({ authorEmail: req.params.email })
+          .toArray();
         res.send(result);
       } catch (error) {
         res.status(500).send({ message: "Error fetching recipes" });
@@ -120,7 +149,9 @@ async function run() {
     // DELETE
     app.delete("/recipes/:id", async (req, res) => {
       try {
-        const result = await recipesCollection.deleteOne({ _id: new ObjectId(req.params.id) });
+        const result = await recipesCollection.deleteOne({
+          _id: new ObjectId(req.params.id),
+        });
         res.send(result);
       } catch (error) {
         res.status(500).send({ message: "Error deleting recipe" });
@@ -132,7 +163,7 @@ async function run() {
       try {
         const result = await recipesCollection.updateOne(
           { _id: new ObjectId(req.params.id) },
-          { $set: req.body }
+          { $set: req.body },
         );
         res.send(result);
       } catch (error) {
@@ -142,7 +173,9 @@ async function run() {
 
     // Ping check
     await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+    console.log(
+      "Pinged your deployment. You successfully connected to MongoDB!",
+    );
   } catch (err) {
     console.error("MongoDB Connection Error:", err);
   }
