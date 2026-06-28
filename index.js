@@ -119,7 +119,7 @@ async function run() {
       }
     });
 
-    // DELETE 
+    // DELETE
     app.delete("/recipes/:id", async (req, res) => {
       try {
         const id = req.params.id;
@@ -131,7 +131,25 @@ async function run() {
       }
     });
 
-    
+    // UPDATE 
+    app.patch("/recipes/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const updatedData = req.body;
+        const filter = { _id: new ObjectId(id) };
+        const updateDoc = { $set: updatedData };
+
+        const result = await recipesCollection.updateOne(filter, updateDoc);
+
+        if (result.matchedCount === 0) {
+          return res.status(404).send({ message: "Recipe not found" });
+        }
+
+        res.send({ message: "Recipe updated successfully", result });
+      } catch (error) {
+        res.status(500).send({ message: "Error updating recipe", error });
+      }
+    });
 
     // Ping check and Connection confirmation
     await client.db("admin").command({ ping: 1 });
