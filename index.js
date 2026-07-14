@@ -32,13 +32,15 @@ async function run() {
     const recipesCollection = db.collection("recipes");
     const usersCollection = db.collection("user");
     const paymentsCollection = db.collection("payments");
+    const favoritesCollection = db.collection("favorites");
 
     // Root check
     app.get("/", (req, res) => {
       res.send("RecipeHub Server is running fine !!!");
     });
 
-    // --- Browse Recipes & Details Routes ---
+    // ---------------------------------GET-------------------------------
+    // For Recipes
     app.get("/all-recipes", async (req, res) => {
       try {
         const { category } = req.query;
@@ -66,6 +68,59 @@ async function run() {
       }
     });
 
+    // My recipes
+    app.get("/my-recipes/:email", async (req, res) => {
+      try {
+        const result = await recipesCollection
+          .find({ authorEmail: req.params.email })
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error fetching recipes" });
+      }
+    });
+
+    // For Payments
+    app.get("/payments/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
+        const result = await paymentsCollection
+          .aggregate([
+            {
+              $match: {
+                userEmail: email,
+                paymentType: { $ne: "subscription" },
+              },
+            },
+            {
+              $project: {
+                amount: 1,
+                paidAt: 1,
+                recipeId: 1,
+                transactionId: 1,
+                paymentStatus: 1,
+                paymentType: 1,
+              },
+            },
+          ])
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error fetching payments" });
+      }
+    });
+
+    // For Favorites
+    app.get("/favorites/:email", async (req, res) => {
+      const email = req.params.email;
+      const result = await favoritesCollection
+        .find({ userEmail: email })
+        .toArray();
+      res.send(result);
+    });
+
+    // ------------------------------POST---------------------------------
+    // For Recipes
     app.post("/recipes", async (req, res) => {
       try {
         const recipeData = req.body;
@@ -113,40 +168,20 @@ async function run() {
       }
     });
 
-    app.get("/payments/:email", async (req, res) => {
-  try {
-    const email = req.params.email;
-    const result = await paymentsCollection.aggregate([
-      { $match: { userEmail: email } },
-      {
-        $project: {
-          amount: 1,
-          paidAt: 1,
-          recipeId: 1,
-          transactionId: 1,     
-          paymentStatus: 1,      
-        },
-      },
-    ]).toArray();
-    res.send(result);
-  } catch (error) {
-    res.status(500).send({ message: "Error fetching payments" });
-  }
-});
-
-    // My recipes API
-    app.get("/my-recipes/:email", async (req, res) => {
-      try {
-        const result = await recipesCollection
-          .find({ authorEmail: req.params.email })
-          .toArray();
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ message: "Error fetching recipes" });
-      }
+    // For Favorites
+    app.post("/favorites", async (req, res) => {
+      const { userEmail, userId, recipeId } = req.body;
+      const result = await favoritesCollection.insertOne({
+        userEmail,
+        userId,
+        recipeId,
+        addedAt: new Date(),
+      });
+      res.send(result);
     });
 
-    // DELETE
+    // ------------------------------------DELETE--------------------------------------
+    // For Recipes
     app.delete("/recipes/:id", async (req, res) => {
       try {
         const result = await recipesCollection.deleteOne({
@@ -156,6 +191,15 @@ async function run() {
       } catch (error) {
         res.status(500).send({ message: "Error deleting recipe" });
       }
+    });
+
+    // For Favorites
+    app.delete("/favorites/:recipeId", async (req, res) => {
+      const { recipeId } = req.params;
+      const result = await favoritesCollection.deleteOne({
+        recipeId: recipeId,
+      });
+      res.send(result);
     });
 
     // UPDATE
