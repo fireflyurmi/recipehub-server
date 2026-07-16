@@ -33,6 +33,7 @@ async function run() {
     const usersCollection = db.collection("user");
     const paymentsCollection = db.collection("payments");
     const favoritesCollection = db.collection("favorites");
+    const reportsCollection = db.collection("reports");
 
     // Root check
     app.get("/", (req, res) => {
@@ -116,6 +117,7 @@ async function run() {
     });
 
     // ------------------------------POST---------------------------------
+    // For recipes
     app.post("/recipes", async (req, res) => {
       try {
         const recipeData = req.body;
@@ -138,7 +140,7 @@ async function run() {
         res.status(500).send({ message: "Error adding recipe", error });
       }
     });
-
+    // For Payments
     app.post("/payments", async (req, res) => {
       try {
         const { paymentType, userEmail, ...paymentDetails } = req.body;
@@ -163,6 +165,7 @@ async function run() {
       }
     });
 
+    // For Favorites
     app.post("/favorites", async (req, res) => {
       const { userEmail, userId, recipeId } = req.body;
       const result = await favoritesCollection.insertOne({
@@ -172,6 +175,23 @@ async function run() {
         addedAt: new Date(),
       });
       res.send(result);
+    });
+
+    // For Reports
+    app.post("/reports", async (req, res) => {
+      try {
+        const { recipeId, reporterEmail, reason } = req.body;
+        const result = await reportsCollection.insertOne({
+          recipeId,
+          reporterEmail,
+          reason,
+          status: "pending", // Default status
+          createdAt: new Date(),
+        });
+        res.status(201).send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error submitting report", error });
+      }
     });
 
     // ------------------------------------DELETE--------------------------------------
@@ -213,7 +233,7 @@ async function run() {
         const id = req.params.id;
         const result = await recipesCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $inc: { likesCount: 1 } }
+          { $inc: { likesCount: 1 } },
         );
         res.send(result);
       } catch (error) {
@@ -223,7 +243,9 @@ async function run() {
 
     // Ping check
     await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+    console.log(
+      "Pinged your deployment. You successfully connected to MongoDB!",
+    );
   } catch (err) {
     console.error("MongoDB Connection Error:", err);
   }
