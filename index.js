@@ -40,7 +40,6 @@ async function run() {
     });
 
     // ---------------------------------GET-------------------------------
-    // For Recipes
     app.get("/all-recipes", async (req, res) => {
       try {
         const { category } = req.query;
@@ -68,7 +67,6 @@ async function run() {
       }
     });
 
-    // My recipes
     app.get("/my-recipes/:email", async (req, res) => {
       try {
         const result = await recipesCollection
@@ -80,7 +78,6 @@ async function run() {
       }
     });
 
-    // For Payments
     app.get("/payments/:email", async (req, res) => {
       try {
         const email = req.params.email;
@@ -110,7 +107,6 @@ async function run() {
       }
     });
 
-    // For Favorites
     app.get("/favorites/:email", async (req, res) => {
       const email = req.params.email;
       const result = await favoritesCollection
@@ -120,7 +116,6 @@ async function run() {
     });
 
     // ------------------------------POST---------------------------------
-    // For Recipes
     app.post("/recipes", async (req, res) => {
       try {
         const recipeData = req.body;
@@ -143,7 +138,7 @@ async function run() {
         res.status(500).send({ message: "Error adding recipe", error });
       }
     });
-    // For Payments
+
     app.post("/payments", async (req, res) => {
       try {
         const { paymentType, userEmail, ...paymentDetails } = req.body;
@@ -168,7 +163,6 @@ async function run() {
       }
     });
 
-    // For Favorites
     app.post("/favorites", async (req, res) => {
       const { userEmail, userId, recipeId } = req.body;
       const result = await favoritesCollection.insertOne({
@@ -181,7 +175,6 @@ async function run() {
     });
 
     // ------------------------------------DELETE--------------------------------------
-    // For Recipes
     app.delete("/recipes/:id", async (req, res) => {
       try {
         const result = await recipesCollection.deleteOne({
@@ -193,7 +186,6 @@ async function run() {
       }
     });
 
-    // For Favorites
     app.delete("/favorites/:recipeId", async (req, res) => {
       const { recipeId } = req.params;
       const result = await favoritesCollection.deleteOne({
@@ -202,7 +194,7 @@ async function run() {
       res.send(result);
     });
 
-    // UPDATE
+    // ------------------------------------PATCH------------------------------------
     app.patch("/recipes/:id", async (req, res) => {
       try {
         const result = await recipesCollection.updateOne(
@@ -215,11 +207,23 @@ async function run() {
       }
     });
 
+    // For Like Counts
+    app.patch("/recipes/like/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await recipesCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $inc: { likesCount: 1 } }
+        );
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error updating likes count", error });
+      }
+    });
+
     // Ping check
     await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!",
-    );
+    console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } catch (err) {
     console.error("MongoDB Connection Error:", err);
   }
