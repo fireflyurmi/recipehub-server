@@ -116,6 +116,47 @@ async function run() {
       res.send(result);
     });
 
+    // For User Dashboard
+    app.get("/user-stats/:email", async (req, res) => {
+      const email = req.params.email;
+
+      const recipesCount = await recipesCollection.countDocuments({
+        authorEmail: email,
+      });
+
+      const favoritesCount = await favoritesCollection.countDocuments({
+        userEmail: email,
+      });
+
+      const likesResult = await recipesCollection
+        .aggregate([
+          { $match: { authorEmail: email } },
+          // Change "$likes" to "$likesCount" to match your PATCH logic
+          { $group: { _id: null, totalLikes: { $sum: "$likesCount" } } },
+        ])
+        .toArray();
+
+      res.send({
+        recipes: recipesCount,
+        favorites: favoritesCount,
+        likes: likesResult[0]?.totalLikes || 0,
+      });
+    });
+
+    // For Popular Recipes
+    app.get("/popular-recipes", async (req, res) => {
+      try {
+        const popular = await recipesCollection
+          .find()
+          .sort({ likesCount: -1 }) 
+          .limit(5) 
+          .toArray();
+        res.send(popular);
+      } catch (error) {
+        res.status(500).send({ message: "Error fetching popular recipes" });
+      }
+    });
+
     // ------------------------------POST---------------------------------
     // For recipes
     app.post("/recipes", async (req, res) => {
