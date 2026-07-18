@@ -241,6 +241,28 @@ async function run() {
       }
     });
 
+    // For User-Profile
+    app.patch("/users/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
+        const { name, image } = req.body;
+
+        const result = await usersCollection.updateOne(
+          { email: email },
+          {
+            $set: {
+              name: name,
+              image: image,
+            },
+          },
+        );
+
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error updating user profile", error });
+      }
+    });
+
     // Ping check
     await client.db("admin").command({ ping: 1 });
     console.log(
