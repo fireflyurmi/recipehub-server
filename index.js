@@ -39,6 +39,7 @@ async function run() {
     app.get("/", (req, res) => {
       res.send("RecipeHub Server is running fine !!!");
     });
+    // -----------------------------USERS ROUTE-----------------------
 
     // ---------------------------------GET-------------------------------
     app.get("/all-recipes", async (req, res) => {
@@ -148,8 +149,8 @@ async function run() {
       try {
         const popular = await recipesCollection
           .find()
-          .sort({ likesCount: -1 }) 
-          .limit(5) 
+          .sort({ likesCount: -1 })
+          .limit(5)
           .toArray();
         res.send(popular);
       } catch (error) {
@@ -301,6 +302,60 @@ async function run() {
         res.send(result);
       } catch (error) {
         res.status(500).send({ message: "Error updating user profile", error });
+      }
+    });
+
+    // -------------------- AUTH VERIFICATION --------------------
+
+    app.post("/login-verify", async (req, res) => {
+      try {
+        const { email } = req.body;
+        const user = await usersCollection.findOne({ email });
+
+        if (user && user.isBlocked === true) {
+          return res.status(403).send({
+            blocked: true,
+            message:
+              "Your account has been blocked by the admin. Please contact support.",
+          });
+        }
+
+        res.send({ blocked: false });
+      } catch (error) {
+        res.status(500).send({ message: "Error verifying user status" });
+      }
+    });
+
+    // -------------------- ADMIN ROUTES --------------------
+
+    // 1. GET all users for the Admin Dashboard
+    app.get("/users", async (req, res) => {
+      try {
+        const result = await usersCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error fetching users", error });
+      }
+    });
+
+    // 2. PATCH to Block/Unblock a user
+    app.patch("/users/block/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const { isBlocked } = req.body;
+
+        const filter = { _id: new ObjectId(id) };
+        const updateDoc = {
+          $set: {
+            isBlocked: isBlocked,
+            updatedAt: new Date(),
+          },
+        };
+
+        const result = await usersCollection.updateOne(filter, updateDoc);
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error updating user status", error });
       }
     });
 
