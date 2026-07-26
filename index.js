@@ -359,6 +359,115 @@ async function run() {
       }
     });
 
+    // Get all recipes for Admin Dashboard
+    app.get("/recipes", async (req, res) => {
+      try {
+        const result = await recipesCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error fetching all recipes" });
+      }
+    });
+
+    // PATCH to update Featured status of a recipe
+    app.patch("/recipes/:id/featured", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const { isFeatured } = req.body;
+        const result = await recipesCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { isFeatured: isFeatured } },
+        );
+        res.send(result);
+      } catch (error) {
+        res
+          .status(500)
+          .send({ message: "Error updating featured status", error });
+      }
+    });
+
+    // Admin Dashboard Overview API 
+    app.get("/admin-stats", async (req, res) => {
+      try {
+        // Exclude admin from total users count 
+        const totalUsers = await usersCollection.countDocuments({
+          role: { $ne: "admin" },
+        });
+        const totalRecipes = await recipesCollection.countDocuments();
+        const premiumMembers = await usersCollection.countDocuments({
+          isPremium: true,
+          role: { $ne: "admin" },
+        });
+        const totalReports = await reportsCollection.countDocuments();
+
+        // Recipe category distribution 
+        const categoryAggregation = await recipesCollection
+          .aggregate([
+            { $group: { _id: "$category", count: { $sum: 1 } } },
+            { $project: { name: "$_id", value: "$count", _id: 0 } },
+          ])
+          .toArray();
+
+        // 12-Month User Growth Aggregation (excluding admins)
+        let userGrowthData = [];
+        try {
+          userGrowthData = await usersCollection
+            .aggregate([
+              { $match: { role: { $ne: "admin" } } },
+              {
+                $project: {
+                  month: {
+                    $dateToString: {
+                      format: "%b",
+                      date: { $ifNull: ["$createdAt", new Date()] },
+                    },
+                  },
+                },
+              },
+              {
+                $group: {
+                  _id: "$month",
+                  users: { $sum: 1 },
+                },
+              },
+            ])
+            .toArray();
+        } catch (err) {
+          userGrowthData = [];
+        }
+
+        const monthsOrder = [
+          "Jan",
+          "Feb",
+          "Mar",
+          "Apr",
+          "May",
+          "Jun",
+          "Jul",
+          "Aug",
+          "Sep",
+          "Oct",
+          "Nov",
+          "Dec",
+        ];
+        const completeUserGrowthData = monthsOrder.map((month) => {
+          const found = userGrowthData.find((item) => item._id === month);
+          return { name: month, users: found ? found.users : 0 };
+        });
+
+        res.send({
+          totalUsers,
+          totalRecipes,
+          premiumMembers,
+          totalReports,
+          categoryData: categoryAggregation,
+          userGrowthData: completeUserGrowthData,
+        });
+      } catch (error) {
+        res.status(500).send({ message: "Error fetching admin stats", error });
+      }
+    });
+
     // Ping check
     await client.db("admin").command({ ping: 1 });
     console.log(
