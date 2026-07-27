@@ -132,7 +132,6 @@ async function run() {
       const likesResult = await recipesCollection
         .aggregate([
           { $match: { authorEmail: email } },
-          // Change "$likes" to "$likesCount" to match your PATCH logic
           { $group: { _id: null, totalLikes: { $sum: "$likesCount" } } },
         ])
         .toArray();
@@ -227,7 +226,7 @@ async function run() {
           recipeId,
           reporterEmail,
           reason,
-          status: "pending", // Default status
+          status: "pending",
           createdAt: new Date(),
         });
         res.status(201).send(result);
@@ -386,10 +385,53 @@ async function run() {
       }
     });
 
-    // Admin Dashboard Overview API 
+    // 3. GET all non-admin transactions for the Admin Dashboard
+    app.get("/admin/transactions", async (req, res) => {
+      try {
+        const result = await paymentsCollection
+          .aggregate([
+            {
+              $lookup: {
+                from: "user",
+                localField: "userEmail",
+                foreignField: "email",
+                as: "userInfo",
+              },
+            },
+            {
+              $unwind: {
+                path: "$userInfo",
+                preserveNullAndEmptyArrays: true,
+              },
+            },
+            {
+              $match: {
+                "userInfo.role": { $ne: "admin" },
+              },
+            },
+            {
+              $project: {
+                amount: 1,
+                paidAt: 1,
+                transactionId: 1,
+                paymentStatus: 1,
+                userEmail: 1,
+                "userInfo.name": 1,
+                "userInfo.image": 1,
+              },
+            },
+          ])
+          .toArray();
+
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error fetching transactions", error });
+      }
+    });
+
+    // Admin Dashboard Overview API
     app.get("/admin-stats", async (req, res) => {
       try {
-        // Exclude admin from total users count 
         const totalUsers = await usersCollection.countDocuments({
           role: { $ne: "admin" },
         });
@@ -400,7 +442,6 @@ async function run() {
         });
         const totalReports = await reportsCollection.countDocuments();
 
-        // Recipe category distribution 
         const categoryAggregation = await recipesCollection
           .aggregate([
             { $group: { _id: "$category", count: { $sum: 1 } } },
@@ -408,7 +449,6 @@ async function run() {
           ])
           .toArray();
 
-        // 12-Month User Growth Aggregation (excluding admins)
         let userGrowthData = [];
         try {
           userGrowthData = await usersCollection
