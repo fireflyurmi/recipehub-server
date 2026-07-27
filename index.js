@@ -429,6 +429,79 @@ async function run() {
       }
     });
 
+    // --- Admin get all reports endpoint ---
+    app.get("/admin/recipe-reports", async (req, res) => {
+      try {
+        const result = await reportsCollection
+          .aggregate([
+            {
+              $addFields: {
+                recipeIdObj: {
+                  $cond: {
+                    if: { $eq: [{ $type: "$recipeId" }, "string"] },
+                    then: { $toObjectId: "$recipeId" },
+                    else: "$recipeId",
+                  },
+                },
+              },
+            },
+            {
+              $lookup: {
+                from: "recipes",
+                localField: "recipeIdObj",
+                foreignField: "_id",
+                as: "recipeInfo",
+              },
+            },
+            {
+              $unwind: {
+                path: "$recipeInfo",
+                preserveNullAndEmptyArrays: true,
+              },
+            },
+          ])
+          .toArray();
+
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error fetching reports", error });
+      }
+    });
+
+    // --- Dismiss Report Endpoint ---
+    app.delete("/admin/reports/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await reportsCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error dismissing report", error });
+      }
+    });
+
+    // --- Delete Recipe endpoint ---
+    app.delete("/admin/recipes/:recipeId", async (req, res) => {
+      try {
+        const recipeId = req.params.recipeId;
+
+        // Delete the recipe
+        const deleteRecipe = await recipesCollection.deleteOne({
+          _id: new ObjectId(recipeId),
+        });
+
+        // Remove associated reports whether they stored recipeId as string or ObjectId
+        await reportsCollection.deleteMany({
+          $or: [{ recipeId: recipeId }, { recipeId: new ObjectId(recipeId) }],
+        });
+
+        res.send(deleteRecipe);
+      } catch (error) {
+        res.status(500).send({ message: "Error removing recipe", error });
+      }
+    });
+
     // Admin Dashboard Overview API
     app.get("/admin-stats", async (req, res) => {
       try {
