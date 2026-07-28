@@ -39,21 +39,41 @@ async function run() {
     app.get("/", (req, res) => {
       res.send("RecipeHub Server is running fine !!!");
     });
+
     // -----------------------------USERS ROUTE-----------------------
 
     // ---------------------------------GET-------------------------------
+    // API for all-recipes to handle category filtering and 10 items pagination securely
     app.get("/all-recipes", async (req, res) => {
       try {
         const { category } = req.query;
         let query = {};
+
         if (category && category !== "All") {
           const categoriesArray = category.split(",");
           query = { category: { $in: categoriesArray } };
         }
-        const result = await recipesCollection.find(query).toArray();
-        res.send(result);
+
+        // Pagination parameters
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10; 
+        const skip = (page - 1) * limit;
+
+        const totalRecipes = await recipesCollection.countDocuments(query);
+        const result = await recipesCollection
+          .find(query)
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+
+        res.send({
+          recipes: result,
+          totalPages: Math.ceil(totalRecipes / limit),
+          currentPage: page,
+          totalRecipes,
+        });
       } catch (error) {
-        res.status(500).send({ message: "Error fetching recipes" });
+        res.status(500).send({ message: "Error fetching recipes", error });
       }
     });
 
@@ -158,7 +178,6 @@ async function run() {
     });
 
     // ------------------------------POST---------------------------------
-    // For recipes
     app.post("/recipes", async (req, res) => {
       try {
         const recipeData = req.body;
@@ -181,7 +200,7 @@ async function run() {
         res.status(500).send({ message: "Error adding recipe", error });
       }
     });
-    // For Payments
+
     app.post("/payments", async (req, res) => {
       try {
         const { paymentType, userEmail, ...paymentDetails } = req.body;
@@ -206,7 +225,6 @@ async function run() {
       }
     });
 
-    // For Favorites
     app.post("/favorites", async (req, res) => {
       const { userEmail, userId, recipeId } = req.body;
       const result = await favoritesCollection.insertOne({
@@ -218,7 +236,6 @@ async function run() {
       res.send(result);
     });
 
-    // For Reports
     app.post("/reports", async (req, res) => {
       try {
         const { recipeId, reporterEmail, reason } = req.body;
@@ -268,7 +285,6 @@ async function run() {
       }
     });
 
-    // For Like Counts
     app.patch("/recipes/like/:id", async (req, res) => {
       try {
         const id = req.params.id;
@@ -282,7 +298,6 @@ async function run() {
       }
     });
 
-    // For User-Profile
     app.patch("/users/:email", async (req, res) => {
       try {
         const email = req.params.email;
@@ -305,7 +320,6 @@ async function run() {
     });
 
     // -------------------- AUTH VERIFICATION --------------------
-
     app.post("/login-verify", async (req, res) => {
       try {
         const { email } = req.body;
@@ -326,8 +340,6 @@ async function run() {
     });
 
     // -------------------- ADMIN ROUTES --------------------
-
-    // 1. GET all users for the Admin Dashboard
     app.get("/users", async (req, res) => {
       try {
         const result = await usersCollection.find().toArray();
@@ -337,7 +349,6 @@ async function run() {
       }
     });
 
-    // 2. PATCH to Block/Unblock a user
     app.patch("/users/block/:id", async (req, res) => {
       try {
         const id = req.params.id;
@@ -358,7 +369,6 @@ async function run() {
       }
     });
 
-    // Get all recipes for Admin Dashboard
     app.get("/recipes", async (req, res) => {
       try {
         const result = await recipesCollection.find().toArray();
@@ -368,7 +378,6 @@ async function run() {
       }
     });
 
-    // PATCH to update Featured status of a recipe
     app.patch("/recipes/:id/featured", async (req, res) => {
       try {
         const id = req.params.id;
@@ -385,7 +394,6 @@ async function run() {
       }
     });
 
-    // 3. GET all non-admin transactions for the Admin Dashboard
     app.get("/admin/transactions", async (req, res) => {
       try {
         const result = await paymentsCollection
@@ -429,7 +437,6 @@ async function run() {
       }
     });
 
-    // --- Admin get all reports endpoint ---
     app.get("/admin/recipe-reports", async (req, res) => {
       try {
         const result = await reportsCollection
@@ -468,7 +475,6 @@ async function run() {
       }
     });
 
-    // --- Dismiss Report Endpoint ---
     app.delete("/admin/reports/:id", async (req, res) => {
       try {
         const id = req.params.id;
@@ -481,17 +487,14 @@ async function run() {
       }
     });
 
-    // --- Delete Recipe endpoint ---
     app.delete("/admin/recipes/:recipeId", async (req, res) => {
       try {
         const recipeId = req.params.recipeId;
 
-        // Delete the recipe
         const deleteRecipe = await recipesCollection.deleteOne({
           _id: new ObjectId(recipeId),
         });
 
-        // Remove associated reports whether they stored recipeId as string or ObjectId
         await reportsCollection.deleteMany({
           $or: [{ recipeId: recipeId }, { recipeId: new ObjectId(recipeId) }],
         });
@@ -502,7 +505,6 @@ async function run() {
       }
     });
 
-    // Admin Dashboard Overview API
     app.get("/admin-stats", async (req, res) => {
       try {
         const totalUsers = await usersCollection.countDocuments({
