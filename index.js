@@ -20,7 +20,7 @@ app.use(
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "x-user-email", "Authorization"],
-  }),
+  })
 );
 app.use(express.json());
 app.use(cookieParser());
@@ -206,7 +206,7 @@ async function run() {
                 isBlocked: isBlocked,
                 updatedAt: new Date(),
               },
-            },
+            }
           );
 
           res.send(result);
@@ -216,8 +216,9 @@ async function run() {
             .status(500)
             .send({ message: "Error updating user status", error });
         }
-      },
+      }
     );
+
     // ----------------------------- ADMIN RECIPE REPORTS ROUTES -----------------------
     app.get(
       "/admin/recipe-reports",
@@ -287,7 +288,7 @@ async function run() {
             .status(500)
             .send({ message: "Error fetching recipe reports", error });
         }
-      },
+      }
     );
 
     app.delete(
@@ -306,7 +307,7 @@ async function run() {
           console.error("Error deleting report:", error);
           res.status(500).send({ message: "Error deleting report", error });
         }
-      },
+      }
     );
 
     app.delete(
@@ -331,7 +332,7 @@ async function run() {
           console.error("Error removing recipe by admin:", error);
           res.status(500).send({ message: "Error removing recipe", error });
         }
-      },
+      }
     );
 
     // ----------------------------- ADMIN TRANSACTIONS ROUTE -----------------------
@@ -386,7 +387,7 @@ async function run() {
             .status(500)
             .send({ message: "Error fetching transactions", error });
         }
-      },
+      }
     );
 
     // ----------------------------- USERS ROUTE -----------------------
@@ -602,7 +603,7 @@ async function run() {
         if (paymentType === "subscription") {
           await usersCollection.updateOne(
             { email: userEmail },
-            { $set: { isPremium: true } },
+            { $set: { isPremium: true } }
           );
         }
 
@@ -704,7 +705,6 @@ async function run() {
           return res.status(404).send({ message: "Recipe not found" });
         }
 
-        // Allow if the user is the owner OR an admin
         const isOwner = recipe.authorEmail === req.user.email;
         const isAdmin = req.user.role === "admin";
 
@@ -757,7 +757,6 @@ async function run() {
           return res.status(404).send({ message: "Recipe not found" });
         }
 
-        // Allow if the user is the owner OR an admin
         const isOwner = recipe.authorEmail === req.user.email;
         const isAdmin = req.user.role === "admin";
 
@@ -769,7 +768,7 @@ async function run() {
 
         const result = await recipesCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: req.body },
+          { $set: req.body }
         );
 
         res.send(result);
@@ -788,7 +787,7 @@ async function run() {
           const { isFeatured } = req.body;
           const result = await recipesCollection.updateOne(
             { _id: new ObjectId(req.params.id) },
-            { $set: { isFeatured: isFeatured } },
+            { $set: { isFeatured: isFeatured } }
           );
           res.send(result);
         } catch (error) {
@@ -796,7 +795,7 @@ async function run() {
             .status(500)
             .send({ message: "Error updating featured status", error });
         }
-      },
+      }
     );
 
     app.patch("/recipes/like/:id", async (req, res) => {
@@ -804,7 +803,7 @@ async function run() {
         const id = req.params.id;
         const result = await recipesCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $inc: { likesCount: 1 } },
+          { $inc: { likesCount: 1 } }
         );
         res.send(result);
       } catch (error) {
@@ -829,7 +828,7 @@ async function run() {
               name: name?.trim(),
               image: image?.trim(),
             },
-          },
+          }
         );
 
         if (result.matchedCount === 0) {
@@ -838,7 +837,7 @@ async function run() {
 
         const updatedUser = await usersCollection.findOne(
           { email },
-          { projection: { password: 0 } },
+          { projection: { password: 0 } }
         );
 
         res.send({
@@ -855,6 +854,8 @@ async function run() {
         res.status(500).send({ message: "Error updating profile", error });
       }
     });
+
+    console.log("MongoDB connected successfully");
   } catch (error) {
     console.error("Database connection error:", error);
   }
@@ -862,6 +863,12 @@ async function run() {
 
 run().catch(console.dir);
 
-app.listen(port, () => {
-  console.log(`RecipeHub Server is running on port ${port}`);
-});
+// Only listen when running locally (not on Vercel)
+if (require.main === module) {
+  app.listen(port, () => {
+    console.log(`RecipeHub Server is running on port ${port}`);
+  });
+}
+
+// Export for Vercel
+module.exports = app;
