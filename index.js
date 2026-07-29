@@ -4,16 +4,26 @@ dns.setServers(["8.8.8.8", "8.8.4.4"]);
 const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
+const cookieParser = require("cookie-parser");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 dotenv.config();
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
 const port = process.env.PORT || 5000;
 const uri = process.env.MONGO_DB_URI;
 
-app.use(cors({ origin: [process.env.CLIENT_URL], credentials: true }));
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL,
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "x-user-email", "Authorization"],
+  }),
+);
 app.use(express.json());
+app.use(cookieParser());
 
 const client = new MongoClient(uri, {
   serverApi: {
@@ -22,6 +32,52 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   },
 });
+
+// --- Auth Middleware ---
+const verifyToken = async (req, res, next) => {
+  try {
+    const userEmail = req.headers["x-user-email"];
+
+    if (!userEmail) {
+      return res
+        .status(401)
+        .send({ message: "Unauthorized access - No session identifier found" });
+    }
+
+    const db = client.db(process.env.AUTH_DB_NAME);
+    const usersCollection = db.collection("user");
+
+    const user = await usersCollection.findOne({ email: userEmail });
+
+    if (!user) {
+      return res.status(401).send({ message: "Unauthorized: User not found" });
+    }
+
+    req.user = user;
+    next();
+  } catch (error) {
+    console.error("Auth Middleware Error:", error);
+    return res.status(403).send({ message: "Forbidden: Invalid token", error });
+  }
+};
+
+// --- Admin Middleware ---
+const verifyAdmin = async (req, res, next) => {
+  try {
+    const user = req.user;
+
+    if (!user || user.role !== "admin") {
+      return res
+        .status(403)
+        .send({ message: "Forbidden: Admin access required" });
+    }
+
+    next();
+  } catch (error) {
+    console.error("Admin Middleware Error:", error);
+    return res.status(403).send({ message: "Forbidden: Invalid admin status" });
+  }
+};
 
 async function run() {
   try {
@@ -40,10 +96,300 @@ async function run() {
       res.send("RecipeHub Server is running fine !!!");
     });
 
-    // -----------------------------USERS ROUTE-----------------------
+    // -------------------- AUTH VERIFICATION (Public Route) --------------------
+    app.post("/login-verify", async (req, res) => {
+      try {
+        const { email } = req.body;
+        if (!email) {
+          return res.send({ blocked: false });
+        }
+        const user = await usersCollection.findOne({ email });
 
-    // ---------------------------------GET-------------------------------
-    // API for all-recipes to handle category filtering and 10 items pagination securely
+        if (user && user.isBlocked === true) {
+          return res.send({
+            blocked: true,
+            message:
+              "Your account has been blocked by the admin. Please contact support.",
+          });
+        }
+
+        res.send({ blocked: false });
+      } catch (error) {
+        console.error("Error verifying user status:", error);
+        res.status(500).send({ message: "Error verifying user status" });
+      }
+    });
+
+    // ----------------------------- ADMIN STATS ROUTE -----------------------
+    app.get("/admin-stats", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const totalUsers = await usersCollection.countDocuments();
+        const totalRecipes = await recipesCollection.countDocuments();
+        const premiumMembers = await usersCollection.countDocuments({
+          isPremium: true,
+        });
+        const totalReports = await reportsCollection.countDocuments();
+
+        const categoryDataRaw = await recipesCollection
+          .aggregate([
+            {
+              $group: {
+                _id: "$category",
+                count: { $sum: 1 },
+              },
+            },
+          ])
+          .toArray();
+
+        const categoryData = categoryDataRaw.map((item) => ({
+          name: item._id || "Uncategorized",
+          value: item.count,
+        }));
+
+        const userGrowthData = [
+          { name: "Jan", users: Math.floor(totalUsers * 0.1) },
+          { name: "Feb", users: Math.floor(totalUsers * 0.2) },
+          { name: "Mar", users: Math.floor(totalUsers * 0.3) },
+          { name: "Apr", users: Math.floor(totalUsers * 0.4) },
+          { name: "May", users: Math.floor(totalUsers * 0.5) },
+          { name: "Jun", users: Math.floor(totalUsers * 0.6) },
+          { name: "Jul", users: totalUsers },
+          { name: "Aug", users: totalUsers },
+          { name: "Sep", users: totalUsers },
+          { name: "Oct", users: totalUsers },
+          { name: "Nov", users: totalUsers },
+          { name: "Dec", users: totalUsers },
+        ];
+
+        res.send({
+          totalUsers,
+          totalRecipes,
+          premiumMembers,
+          totalReports,
+          categoryData,
+          userGrowthData,
+        });
+      } catch (error) {
+        console.error("Error fetching admin stats:", error);
+        res.status(500).send({ message: "Error fetching admin stats", error });
+      }
+    });
+
+    // ----------------------------- MANAGE USERS ROUTES -----------------------
+    app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const result = await usersCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching users:", error);
+        res.status(500).send({ message: "Error fetching users", error });
+      }
+    });
+
+    app.patch(
+      "/users/block/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const id = req.params.id;
+          const { isBlocked } = req.body;
+
+          if (!ObjectId.isValid(id)) {
+            return res.status(400).send({ message: "Invalid user ID" });
+          }
+
+          const result = await usersCollection.updateOne(
+            { _id: new ObjectId(id) },
+            {
+              $set: {
+                isBlocked: isBlocked,
+                updatedAt: new Date(),
+              },
+            },
+          );
+
+          res.send(result);
+        } catch (error) {
+          console.error("Error updating user status:", error);
+          res
+            .status(500)
+            .send({ message: "Error updating user status", error });
+        }
+      },
+    );
+    // ----------------------------- ADMIN RECIPE REPORTS ROUTES -----------------------
+    app.get(
+      "/admin/recipe-reports",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const reports = await reportsCollection
+            .aggregate([
+              {
+                $addFields: {
+                  recipeObjId: {
+                    $cond: {
+                      if: {
+                        $regexMatch: {
+                          input: "$recipeId",
+                          regex: /^[0-9a-fA-F]{24}$/,
+                        },
+                      },
+                      then: { $toObjectId: "$recipeId" },
+                      else: null,
+                    },
+                  },
+                },
+              },
+              {
+                $lookup: {
+                  from: "recipes",
+                  localField: "recipeObjId",
+                  foreignField: "_id",
+                  as: "recipeDetails",
+                },
+              },
+              {
+                $lookup: {
+                  from: "user",
+                  localField: "reporterEmail",
+                  foreignField: "email",
+                  as: "reporterDetails",
+                },
+              },
+              {
+                $addFields: {
+                  recipeInfo: { $arrayElemAt: ["$recipeDetails", 0] },
+                  reporterName: {
+                    $ifNull: [
+                      { $arrayElemAt: ["$reporterDetails.name", 0] },
+                      "$reporterEmail",
+                    ],
+                  },
+                },
+              },
+              {
+                $project: {
+                  recipeDetails: 0,
+                  reporterDetails: 0,
+                  recipeObjId: 0,
+                },
+              },
+            ])
+            .toArray();
+
+          res.send(reports);
+        } catch (error) {
+          console.error("Error fetching recipe reports:", error);
+          res
+            .status(500)
+            .send({ message: "Error fetching recipe reports", error });
+        }
+      },
+    );
+
+    app.delete(
+      "/admin/reports/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const reportId = req.params.id;
+          const query = ObjectId.isValid(reportId)
+            ? { _id: new ObjectId(reportId) }
+            : { _id: reportId };
+          const result = await reportsCollection.deleteOne(query);
+          res.send(result);
+        } catch (error) {
+          console.error("Error deleting report:", error);
+          res.status(500).send({ message: "Error deleting report", error });
+        }
+      },
+    );
+
+    app.delete(
+      "/admin/recipes/:recipeId",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const recipeId = req.params.recipeId;
+          const recipeQuery = ObjectId.isValid(recipeId)
+            ? { _id: new ObjectId(recipeId) }
+            : { _id: recipeId };
+
+          await recipesCollection.deleteOne(recipeQuery);
+          await reportsCollection.deleteMany({ recipeId: recipeId });
+
+          res.send({
+            success: true,
+            message: "Recipe and its reports removed successfully.",
+          });
+        } catch (error) {
+          console.error("Error removing recipe by admin:", error);
+          res.status(500).send({ message: "Error removing recipe", error });
+        }
+      },
+    );
+
+    // ----------------------------- ADMIN TRANSACTIONS ROUTE -----------------------
+    app.get(
+      "/admin/transactions",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const result = await paymentsCollection
+            .aggregate([
+              {
+                $lookup: {
+                  from: "user",
+                  localField: "userEmail",
+                  foreignField: "email",
+                  as: "userInfo",
+                },
+              },
+              {
+                $unwind: {
+                  path: "$userInfo",
+                  preserveNullAndEmptyArrays: true,
+                },
+              },
+              {
+                $match: {
+                  "userInfo.role": { $ne: "admin" },
+                },
+              },
+              {
+                $project: {
+                  amount: 1,
+                  paidAt: 1,
+                  transactionId: 1,
+                  paymentStatus: 1,
+                  userEmail: 1,
+                  "userInfo.name": 1,
+                  "userInfo.image": 1,
+                },
+              },
+              {
+                $sort: { paidAt: -1 },
+              },
+            ])
+            .toArray();
+
+          res.send(result);
+        } catch (error) {
+          console.error("Error fetching transactions:", error);
+          res
+            .status(500)
+            .send({ message: "Error fetching transactions", error });
+        }
+      },
+    );
+
+    // ----------------------------- USERS ROUTE -----------------------
     app.get("/all-recipes", async (req, res) => {
       try {
         const { category } = req.query;
@@ -54,9 +400,8 @@ async function run() {
           query = { category: { $in: categoriesArray } };
         }
 
-        // Pagination parameters
         const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10; 
+        const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
 
         const totalRecipes = await recipesCollection.countDocuments(query);
@@ -77,6 +422,28 @@ async function run() {
       }
     });
 
+    app.get("/featured-recipes", async (req, res) => {
+      try {
+        const result = await recipesCollection
+          .find({ isFeatured: true })
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        res
+          .status(500)
+          .send({ message: "Error fetching featured recipes", error });
+      }
+    });
+
+    app.get("/recipes", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const result = await recipesCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error fetching recipes", error });
+      }
+    });
+
     app.get("/recipes/:id", async (req, res) => {
       try {
         const id = req.params.id;
@@ -89,7 +456,7 @@ async function run() {
       }
     });
 
-    app.get("/my-recipes/:email", async (req, res) => {
+    app.get("/my-recipes/:email", verifyToken, async (req, res) => {
       try {
         const result = await recipesCollection
           .find({ authorEmail: req.params.email })
@@ -100,9 +467,13 @@ async function run() {
       }
     });
 
-    app.get("/payments/:email", async (req, res) => {
+    app.get("/payments/:email", verifyToken, async (req, res) => {
       try {
         const email = req.params.email;
+        if (req.user?.email !== email) {
+          return res.status(403).send({ message: "Forbidden: Access denied" });
+        }
+
         const result = await paymentsCollection
           .aggregate([
             {
@@ -123,47 +494,58 @@ async function run() {
             },
           ])
           .toArray();
+
         res.send(result);
       } catch (error) {
         res.status(500).send({ message: "Error fetching payments" });
       }
     });
 
-    app.get("/favorites/:email", async (req, res) => {
-      const email = req.params.email;
-      const result = await favoritesCollection
-        .find({ userEmail: email })
-        .toArray();
-      res.send(result);
+    app.get("/favorites", verifyToken, async (req, res) => {
+      try {
+        const email = req.user.email;
+        const result = await favoritesCollection
+          .find({ userEmail: email })
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error fetching favorites", error });
+      }
     });
 
-    // For User Dashboard
-    app.get("/user-stats/:email", async (req, res) => {
-      const email = req.params.email;
+    app.get("/user-stats/:email", verifyToken, async (req, res) => {
+      try {
+        const email = req.params.email;
 
-      const recipesCount = await recipesCollection.countDocuments({
-        authorEmail: email,
-      });
+        if (req.user?.email !== email && req.user?.role !== "admin") {
+          return res.status(403).send({ message: "Forbidden: Access denied" });
+        }
 
-      const favoritesCount = await favoritesCollection.countDocuments({
-        userEmail: email,
-      });
+        const recipesCount = await recipesCollection.countDocuments({
+          authorEmail: email,
+        });
 
-      const likesResult = await recipesCollection
-        .aggregate([
-          { $match: { authorEmail: email } },
-          { $group: { _id: null, totalLikes: { $sum: "$likesCount" } } },
-        ])
-        .toArray();
+        const favoritesCount = await favoritesCollection.countDocuments({
+          userEmail: email,
+        });
 
-      res.send({
-        recipes: recipesCount,
-        favorites: favoritesCount,
-        likes: likesResult[0]?.totalLikes || 0,
-      });
+        const likesResult = await recipesCollection
+          .aggregate([
+            { $match: { authorEmail: email } },
+            { $group: { _id: null, totalLikes: { $sum: "$likesCount" } } },
+          ])
+          .toArray();
+
+        res.send({
+          recipes: recipesCount,
+          favorites: favoritesCount,
+          likes: likesResult[0]?.totalLikes || 0,
+        });
+      } catch (error) {
+        res.status(500).send({ message: "Error fetching user stats", error });
+      }
     });
 
-    // For Popular Recipes
     app.get("/popular-recipes", async (req, res) => {
       try {
         const popular = await recipesCollection
@@ -177,8 +559,8 @@ async function run() {
       }
     });
 
-    // ------------------------------POST---------------------------------
-    app.post("/recipes", async (req, res) => {
+    // ------------------------------ POST ---------------------------------
+    app.post("/recipes", verifyToken, async (req, res) => {
       try {
         const recipeData = req.body;
         const { authorEmail } = recipeData;
@@ -201,14 +583,19 @@ async function run() {
       }
     });
 
-    app.post("/payments", async (req, res) => {
+    app.post("/payments", verifyToken, async (req, res) => {
       try {
         const { paymentType, userEmail, ...paymentDetails } = req.body;
+        if (req.user?.email !== userEmail) {
+          return res
+            .status(403)
+            .send({ message: "Forbidden: Unauthorized user match" });
+        }
 
         const result = await paymentsCollection.insertOne({
           ...paymentDetails,
           userEmail,
-          paymentType,
+          paymentType: paymentType || "purchase",
           paidAt: new Date(),
         });
 
@@ -222,6 +609,54 @@ async function run() {
         res.status(201).send(result);
       } catch (error) {
         res.status(500).send({ message: "Error saving payment", error });
+      }
+    });
+
+    app.post("/save-payment", verifyToken, async (req, res) => {
+      try {
+        const { sessionId, userEmail } = req.body;
+
+        if (req.user?.email !== userEmail) {
+          return res.status(403).send({ message: "Forbidden: Access denied" });
+        }
+
+        const existingPayment = await paymentsCollection.findOne({ sessionId });
+        if (existingPayment) {
+          return res.status(200).send({
+            message: "Payment already recorded",
+            payment: existingPayment,
+          });
+        }
+
+        const stripeSession =
+          await stripe.checkout.sessions.retrieve(sessionId);
+
+        if (!stripeSession || stripeSession.payment_status !== "paid") {
+          return res
+            .status(400)
+            .send({ message: "Invalid or unpaid Stripe session" });
+        }
+
+        const paymentData = {
+          sessionId: stripeSession.id,
+          transactionId: stripeSession.payment_intent,
+          userEmail: userEmail,
+          amount: stripeSession.amount_total / 100,
+          currency: stripeSession.currency,
+          paymentStatus: stripeSession.payment_status,
+          paymentType: stripeSession.metadata?.paymentType || "recipe_purchase",
+          recipeId: stripeSession.metadata?.recipeId || null,
+          paidAt: new Date(),
+        };
+
+        const result = await paymentsCollection.insertOne(paymentData);
+        res.status(201).send({ success: true, insertedId: result.insertedId });
+      } catch (error) {
+        console.error("Error verifying and saving payment from Stripe:", error);
+        res.status(500).send({
+          message: "Internal server error while saving payment",
+          error,
+        });
       }
     });
 
@@ -252,38 +687,117 @@ async function run() {
       }
     });
 
-    // ------------------------------------DELETE--------------------------------------
-    app.delete("/recipes/:id", async (req, res) => {
+    // ------------------------------------ DELETE --------------------------------------
+    app.delete("/recipes/:id", verifyToken, async (req, res) => {
       try {
-        const result = await recipesCollection.deleteOne({
-          _id: new ObjectId(req.params.id),
+        const id = req.params.id;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: "Invalid recipe ID" });
+        }
+
+        const recipe = await recipesCollection.findOne({
+          _id: new ObjectId(id),
         });
+
+        if (!recipe) {
+          return res.status(404).send({ message: "Recipe not found" });
+        }
+
+        // Allow if the user is the owner OR an admin
+        const isOwner = recipe.authorEmail === req.user.email;
+        const isAdmin = req.user.role === "admin";
+
+        if (!isOwner && !isAdmin) {
+          return res.status(403).send({
+            message: "Forbidden: You can only delete your own recipes",
+          });
+        }
+
+        const result = await recipesCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+
         res.send(result);
       } catch (error) {
+        console.error("Error deleting recipe:", error);
         res.status(500).send({ message: "Error deleting recipe" });
       }
     });
 
-    app.delete("/favorites/:recipeId", async (req, res) => {
-      const { recipeId } = req.params;
-      const result = await favoritesCollection.deleteOne({
-        recipeId: recipeId,
-      });
-      res.send(result);
-    });
-
-    // ------------------------------------PATCH------------------------------------
-    app.patch("/recipes/:id", async (req, res) => {
+    app.delete("/favorites/:recipeId", verifyToken, async (req, res) => {
       try {
-        const result = await recipesCollection.updateOne(
-          { _id: new ObjectId(req.params.id) },
-          { $set: req.body },
-        );
+        const { recipeId } = req.params;
+        const userEmail = req.user.email;
+
+        const result = await favoritesCollection.deleteOne({
+          userEmail: userEmail,
+          $or: [{ recipeId: recipeId }, { recipeId: new ObjectId(recipeId) }],
+        });
         res.send(result);
       } catch (error) {
+        res.status(500).send({ message: "Error deleting favorite", error });
+      }
+    });
+
+    // ------------------------------------ PATCH ------------------------------------
+    app.patch("/recipes/:id", verifyToken, async (req, res) => {
+      try {
+        const id = req.params.id;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: "Invalid recipe ID" });
+        }
+
+        const recipe = await recipesCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!recipe) {
+          return res.status(404).send({ message: "Recipe not found" });
+        }
+
+        // Allow if the user is the owner OR an admin
+        const isOwner = recipe.authorEmail === req.user.email;
+        const isAdmin = req.user.role === "admin";
+
+        if (!isOwner && !isAdmin) {
+          return res.status(403).send({
+            message: "Forbidden: You can only edit your own recipes",
+          });
+        }
+
+        const result = await recipesCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: req.body },
+        );
+
+        res.send(result);
+      } catch (error) {
+        console.error("Error updating recipe:", error);
         res.status(500).send({ message: "Error updating recipe", error });
       }
     });
+
+    app.patch(
+      "/recipes/:id/featured",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { isFeatured } = req.body;
+          const result = await recipesCollection.updateOne(
+            { _id: new ObjectId(req.params.id) },
+            { $set: { isFeatured: isFeatured } },
+          );
+          res.send(result);
+        } catch (error) {
+          res
+            .status(500)
+            .send({ message: "Error updating featured status", error });
+        }
+      },
+    );
 
     app.patch("/recipes/like/:id", async (req, res) => {
       try {
@@ -298,303 +812,56 @@ async function run() {
       }
     });
 
-    app.patch("/users/:email", async (req, res) => {
+    app.patch("/users/:email", verifyToken, async (req, res) => {
       try {
         const email = req.params.email;
+
+        if (req.user?.email !== email) {
+          return res.status(403).send({ message: "Forbidden: Access denied" });
+        }
+
         const { name, image } = req.body;
 
         const result = await usersCollection.updateOne(
           { email: email },
           {
             $set: {
-              name: name,
-              image: image,
+              name: name?.trim(),
+              image: image?.trim(),
             },
           },
         );
 
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ message: "Error updating user profile", error });
-      }
-    });
-
-    // -------------------- AUTH VERIFICATION --------------------
-    app.post("/login-verify", async (req, res) => {
-      try {
-        const { email } = req.body;
-        const user = await usersCollection.findOne({ email });
-
-        if (user && user.isBlocked === true) {
-          return res.status(403).send({
-            blocked: true,
-            message:
-              "Your account has been blocked by the admin. Please contact support.",
-          });
+        if (result.matchedCount === 0) {
+          return res.status(404).send({ message: "User not found" });
         }
 
-        res.send({ blocked: false });
-      } catch (error) {
-        res.status(500).send({ message: "Error verifying user status" });
-      }
-    });
-
-    // -------------------- ADMIN ROUTES --------------------
-    app.get("/users", async (req, res) => {
-      try {
-        const result = await usersCollection.find().toArray();
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ message: "Error fetching users", error });
-      }
-    });
-
-    app.patch("/users/block/:id", async (req, res) => {
-      try {
-        const id = req.params.id;
-        const { isBlocked } = req.body;
-
-        const filter = { _id: new ObjectId(id) };
-        const updateDoc = {
-          $set: {
-            isBlocked: isBlocked,
-            updatedAt: new Date(),
-          },
-        };
-
-        const result = await usersCollection.updateOne(filter, updateDoc);
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ message: "Error updating user status", error });
-      }
-    });
-
-    app.get("/recipes", async (req, res) => {
-      try {
-        const result = await recipesCollection.find().toArray();
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ message: "Error fetching all recipes" });
-      }
-    });
-
-    app.patch("/recipes/:id/featured", async (req, res) => {
-      try {
-        const id = req.params.id;
-        const { isFeatured } = req.body;
-        const result = await recipesCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { isFeatured: isFeatured } },
+        const updatedUser = await usersCollection.findOne(
+          { email },
+          { projection: { password: 0 } },
         );
-        res.send(result);
-      } catch (error) {
-        res
-          .status(500)
-          .send({ message: "Error updating featured status", error });
-      }
-    });
-
-    app.get("/admin/transactions", async (req, res) => {
-      try {
-        const result = await paymentsCollection
-          .aggregate([
-            {
-              $lookup: {
-                from: "user",
-                localField: "userEmail",
-                foreignField: "email",
-                as: "userInfo",
-              },
-            },
-            {
-              $unwind: {
-                path: "$userInfo",
-                preserveNullAndEmptyArrays: true,
-              },
-            },
-            {
-              $match: {
-                "userInfo.role": { $ne: "admin" },
-              },
-            },
-            {
-              $project: {
-                amount: 1,
-                paidAt: 1,
-                transactionId: 1,
-                paymentStatus: 1,
-                userEmail: 1,
-                "userInfo.name": 1,
-                "userInfo.image": 1,
-              },
-            },
-          ])
-          .toArray();
-
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ message: "Error fetching transactions", error });
-      }
-    });
-
-    app.get("/admin/recipe-reports", async (req, res) => {
-      try {
-        const result = await reportsCollection
-          .aggregate([
-            {
-              $addFields: {
-                recipeIdObj: {
-                  $cond: {
-                    if: { $eq: [{ $type: "$recipeId" }, "string"] },
-                    then: { $toObjectId: "$recipeId" },
-                    else: "$recipeId",
-                  },
-                },
-              },
-            },
-            {
-              $lookup: {
-                from: "recipes",
-                localField: "recipeIdObj",
-                foreignField: "_id",
-                as: "recipeInfo",
-              },
-            },
-            {
-              $unwind: {
-                path: "$recipeInfo",
-                preserveNullAndEmptyArrays: true,
-              },
-            },
-          ])
-          .toArray();
-
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ message: "Error fetching reports", error });
-      }
-    });
-
-    app.delete("/admin/reports/:id", async (req, res) => {
-      try {
-        const id = req.params.id;
-        const result = await reportsCollection.deleteOne({
-          _id: new ObjectId(id),
-        });
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({ message: "Error dismissing report", error });
-      }
-    });
-
-    app.delete("/admin/recipes/:recipeId", async (req, res) => {
-      try {
-        const recipeId = req.params.recipeId;
-
-        const deleteRecipe = await recipesCollection.deleteOne({
-          _id: new ObjectId(recipeId),
-        });
-
-        await reportsCollection.deleteMany({
-          $or: [{ recipeId: recipeId }, { recipeId: new ObjectId(recipeId) }],
-        });
-
-        res.send(deleteRecipe);
-      } catch (error) {
-        res.status(500).send({ message: "Error removing recipe", error });
-      }
-    });
-
-    app.get("/admin-stats", async (req, res) => {
-      try {
-        const totalUsers = await usersCollection.countDocuments({
-          role: { $ne: "admin" },
-        });
-        const totalRecipes = await recipesCollection.countDocuments();
-        const premiumMembers = await usersCollection.countDocuments({
-          isPremium: true,
-          role: { $ne: "admin" },
-        });
-        const totalReports = await reportsCollection.countDocuments();
-
-        const categoryAggregation = await recipesCollection
-          .aggregate([
-            { $group: { _id: "$category", count: { $sum: 1 } } },
-            { $project: { name: "$_id", value: "$count", _id: 0 } },
-          ])
-          .toArray();
-
-        let userGrowthData = [];
-        try {
-          userGrowthData = await usersCollection
-            .aggregate([
-              { $match: { role: { $ne: "admin" } } },
-              {
-                $project: {
-                  month: {
-                    $dateToString: {
-                      format: "%b",
-                      date: { $ifNull: ["$createdAt", new Date()] },
-                    },
-                  },
-                },
-              },
-              {
-                $group: {
-                  _id: "$month",
-                  users: { $sum: 1 },
-                },
-              },
-            ])
-            .toArray();
-        } catch (err) {
-          userGrowthData = [];
-        }
-
-        const monthsOrder = [
-          "Jan",
-          "Feb",
-          "Mar",
-          "Apr",
-          "May",
-          "Jun",
-          "Jul",
-          "Aug",
-          "Sep",
-          "Oct",
-          "Nov",
-          "Dec",
-        ];
-        const completeUserGrowthData = monthsOrder.map((month) => {
-          const found = userGrowthData.find((item) => item._id === month);
-          return { name: month, users: found ? found.users : 0 };
-        });
 
         res.send({
-          totalUsers,
-          totalRecipes,
-          premiumMembers,
-          totalReports,
-          categoryData: categoryAggregation,
-          userGrowthData: completeUserGrowthData,
+          success: true,
+          modifiedCount: result.modifiedCount,
+          message:
+            result.modifiedCount > 0
+              ? "Profile updated successfully"
+              : "No changes detected",
+          user: updatedUser,
         });
       } catch (error) {
-        res.status(500).send({ message: "Error fetching admin stats", error });
+        console.error("Error updating profile:", error);
+        res.status(500).send({ message: "Error updating profile", error });
       }
     });
-
-    // Ping check
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!",
-    );
-  } catch (err) {
-    console.error("MongoDB Connection Error:", err);
+  } catch (error) {
+    console.error("Database connection error:", error);
   }
 }
 
 run().catch(console.dir);
 
 app.listen(port, () => {
-  console.log(`Server Running On ${port}`);
+  console.log(`RecipeHub Server is running on port ${port}`);
 });
